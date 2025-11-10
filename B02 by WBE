@@ -1,0 +1,117 @@
+create or replace temporary table All_B02BX_Flow_WBE as
+with A as (
+    select 
+        t1.charge_ARI, 
+        t1.SERVICING_EFFECTIVE_DATE,
+        t1.user_ARI,
+        t1.loan_amount,
+        t1.prod,
+        t1.is_repeat_cap,
+        date_trunc('week', t1.captured_dt) as Capture_Week,
+        t1.payment,
+        t1.merchant,
+        t1.PAYMENT_RANK,
+        t1.TOTAL_OUTSTANDING_BALANCE,
+        upper(trim(t1.WBE_BUCKET)) as WBE_BUCKET,  
+        case 
+            when t1.days_overdue = 0 and chargedoff = 0 then 'B0'
+            when t1.days_overdue between 1 and 29 and t1.status in ('overdue', 'current') and chargedoff = 0 then 'B1'
+            when t1.days_overdue between 30 and 59 and t1.status in ('overdue', 'current') and chargedoff = 0 then 'B2'
+            when t1.days_overdue between 60 and 89 and t1.status in ('overdue', 'current') and chargedoff = 0 then 'B3'
+            when t1.days_overdue between 90 and 119 and t1.status in ('overdue', 'current') and chargedoff = 0 then 'B4'
+            when t1.status = 'charged_off' or chargedoff = 1 or t1.days_overdue >= 120 then 'B5' 
+        end as DQ_Bucket
+    from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.Backbook_Generated_DTD_Balances t1
+    where prod in ('AC IL','Core IL') 
+      and merchant not in ('Peloton') 
+),
+B as (
+    select 
+        SERVICING_EFFECTIVE_DATE,
+        TOTAL_OUTSTANDING_BALANCE,
+        DQ_Bucket,
+
+        lag(DQ_Bucket,2) over(partition by charge_ARI order by SERVICING_EFFECTIVE_DATE) as DQ_Bucket_lag2,
+        lag(TOTAL_OUTSTANDING_BALANCE,2) over(partition by charge_ARI order by SERVICING_EFFECTIVE_DATE) as OB_lag2,
+
+
+        lag(WBE_BUCKET,2) over(partition by charge_ARI order by SERVICING_EFFECTIVE_DATE) as WBE_BUCKET_lag2,
+
+
+        case 
+            when lag(WBE_BUCKET,2) over(partition by charge_ARI order by SERVICING_EFFECTIVE_DATE) like 'A:%' 
+                then 'WBE_>5k' 
+            when lag(WBE_BUCKET,2) over(partition by charge_ARI order by SERVICING_EFFECTIVE_DATE) is null
+                then 'UNKNOWN'
+            else 'WBE_<5k'
+        end as WBE_GROUP_L2
+    from A
+),
+Balances as (
+    select 
+        weekofyear(SERVICING_EFFECTIVE_DATE) as WoY,
+        year(SERVICING_EFFECTIVE_DATE) as Year_New,
+        WBE_GROUP_L2,
+        sum(case when DQ_Bucket_lag2='B0' then OB_lag2 else 0 end) as B0_Balance_L2
+    from B
+    where WBE_GROUP_L2 <> 'UNKNOWN'
+    group by 1,2,3
+),
+Transition as (
+    select  
+        weekofyear(SERVICING_EFFECTIVE_DATE) as WoY,
+        year(SERVICING_EFFECTIVE_DATE) as Year_New,
+        WBE_GROUP_L2,
+
+        sum(case when DQ_Bucket_lag2='B0' and DQ_Bucket='B2' 
+                 then TOTAL_OUTSTANDING_BALANCE else 0 end) as FR2
+    from B 
+    where WBE_GROUP_L2 <> 'UNKNOWN'
+    group by 1,2,3
+),
+Flow_Rate2 as (
+    select 
+        t1.WoY,
+        t1.Year_New,
+        t1.WBE_GROUP_L2,
+        t1.FR2,
+        t2.B0_Balance_L2,
+        t1.FR2 / nullif(t2.B0_Balance_L2,0) as Flow_Rate2
+    from Transition t1
+    left join Balances  t2
+      on t1.WoY=t2.WoY and t1.Year_New=t2.Year_New and t1.WBE_GROUP_L2=t2.WBE_GROUP_L2
+)
+
+select 
+    WoY,
+    Year_New,
+    WBE_GROUP_L2 as WBE_GROUP,
+    FR2,
+    B0_Balance_L2,
+    Flow_Rate2
+from Flow_Rate2
+where Year_New in (2023,2024,2025)
+  and not (Year_New = year(current_date()) and WoY = weekofyear(current_date()));
+;
+
+
+with A as (
+    select 
+        WBE_GROUP,
+        Year_New,
+        WoY,
+        sum(FR2)                  as FR2_sum,
+        sum(nullif(B0_Balance_L2,0)) as Denom2_sum,
+        sum(FR2) / nullif(sum(nullif(B0_Balance_L2,0)),0) as FFR0_2
+    from All_B02BX_Flow_WBE
+    group by 1,2,3
+)
+select
+    WBE_GROUP,
+    WoY,
+    max(case when Year_New=2023 then FFR0_2 end) as "2023",
+    max(case when Year_New=2024 then FFR0_2 end) as "2024",
+    max(case when Year_New=2025 then FFR0_2 end) as "2025"
+from A
+group by WBE_GROUP, WoY
+order by WBE_GROUP, WoY;
