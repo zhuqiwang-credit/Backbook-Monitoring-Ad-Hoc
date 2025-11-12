@@ -1,0 +1,99 @@
+--Autopay Calculation Weekly Snapshot
+
+--create itac table
+create or replace temp table itac_info as
+select distinct charge_ari, 
+case when max(itac) >= 94 then 'High 94'
+     when max(itac) < 94 then 'Low 94'
+     when max(itac) is null then null end as itac_band
+from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.Backbook_Generated_DTD_Balances
+where year(cycle_date)=2025
+group by 1 order by 1;
+
+select top 1000 * from itac_info;
+
+--select only one row per week per loan 
+create or replace temp table weekly_autopay_start as
+with ap_base as (
+  select
+    charge_ari,
+    eff_dt as eff_dt,
+    if_autopay_on_from_ledger as ap_on,
+    days_overdue,
+    date_trunc('week', eff_dt) as week_start,
+    weekofyear(eff_dt) as woy,
+    year(eff_dt)as year_new
+  from dbt_analytics.payment_autopay_fact_2025 
+),
+
+wk_keys as (
+  select distinct
+    charge_ari, week_start, woy, year_new
+  from ap_base
+),
+
+picked as (
+  select
+    w.charge_ari,
+    w.week_start,
+    w.woy,
+    w.year_new,
+    b.days_overdue,
+    max(b.ap_on) as ap_on_week_start
+  from wk_keys w
+  inner join ap_base b
+          on b.charge_ari = w.charge_ari
+         and b.eff_dt     = w.week_start     
+  group by 1,2,3,4,5
+)
+select
+  charge_ari,
+  week_start,
+  dateadd(day, 6, week_start) as week_end,
+  woy,
+  year_new,
+  ap_on_week_start,
+  days_overdue
+from picked;
+
+select top 1000 * from weekly_autopay_start;
+
+create or replace temp table autopay_driver as 
+select a.* ,
+case when days_overdue>=120 then 'B5'
+     when days_overdue between 90 and 119 then 'B4'
+     when days_overdue between 60 and 89 then 'B3'
+     when days_overdue between 30 and 59 then 'B2'
+     when days_overdue between 1 and 29 then 'B1'
+     when days_overdue =0 then 'B0'
+     else null end as bucket,
+lag(ap_on_week_start,1) over (partition by a.charge_ari order by a.week_start) as last_week_ap,
+b.itac_band
+from weekly_autopay_start a 
+left join itac_info b
+on a.charge_ari=b.charge_ari;
+
+select top 1000 * from autopay_driver where last_week_ap =1 and ap_on_week_start=0 order by 1;--autopay off
+select top 1000 * from autopay_driver where charge_ari in ('0000-1BH9');-- acct level works fine
+
+create or replace temp table add_ind as
+select *,
+case when last_week_ap - ap_on_week_start >0 then 1
+     else 0 end as ap_off_ind
+from autopay_driver
+where last_week_ap is not null;
+
+select top 1000 * from add_ind;
+
+
+select
+  woy,
+  itac_band,
+  bucket,
+  sum(ap_off_ind) as total_ap_off,
+  sum(last_week_ap) as total_ap_lw,
+  sum(ap_off_ind) / nullif(sum(last_week_ap), 0) as ap_off_rate  
+from add_ind
+where woy <weekofyear(current_date)
+GROUP BY 1,2,3
+ORDER BY 1,2,3;
