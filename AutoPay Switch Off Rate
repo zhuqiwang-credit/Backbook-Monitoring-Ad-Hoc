@@ -1,99 +1,93 @@
---Autopay Calculation Weekly Snapshot
+---Autopay Monitoring
 
---create itac table
-create or replace temp table itac_info as
-select distinct charge_ari, 
-case when max(itac) >= 94 then 'High 94'
-     when max(itac) < 94 then 'Low 94'
-     when max(itac) is null then null end as itac_band
-from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.Backbook_Generated_DTD_Balances
-where year(cycle_date)=2025
-group by 1 order by 1;
+--loan informaiton
+create or replace table PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.loan_info as
+select charge_ari, prod,zp_ib,is_repeat_cap,
+case when max(itac) <=94 then '<=94'
+     when max(itac) between 95 and 96 then '95-96'
+     when max(itac) between 97 and 98 then '97-98'
+     when max(itac) >98 then '99-100'
+     when max(itac) is null then null 
+     else 'error' end as itac_band,
+case when max(fico_score) <580 then '<580 Deep_Sub_Prime'
+     when max(fico_score) between 580 and 619 then '<620 Subprime'
+     when max(fico_score) between 620 and 699 then '<700 Near_Prime'
+     when max(fico_score) between 700 and 739 then '<740 Prime'
+     when max(fico_score) >= 740 then '>=740 Super_Prime'
+     else null end as fico_band
+from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.Loan_Level_Information
+group by 1,2,3,4
+;
 
-select top 1000 * from itac_info;
+select distinct prod from loan_info;
 
---select only one row per week per loan 
-create or replace temp table weekly_autopay_start as
-with ap_base as (
-  select
-    charge_ari,
-    eff_dt as eff_dt,
-    if_autopay_on_from_ledger as ap_on,
-    days_overdue,
-    date_trunc('week', eff_dt) as week_start,
-    weekofyear(eff_dt) as woy,
-    year(eff_dt)as year_new
-  from dbt_analytics.payment_autopay_fact_2025 
-),
-
-wk_keys as (
-  select distinct
-    charge_ari, week_start, woy, year_new
-  from ap_base
-),
-
-picked as (
-  select
-    w.charge_ari,
-    w.week_start,
-    w.woy,
-    w.year_new,
-    b.days_overdue,
-    max(b.ap_on) as ap_on_week_start
-  from wk_keys w
-  inner join ap_base b
-          on b.charge_ari = w.charge_ari
-         and b.eff_dt     = w.week_start     
-  group by 1,2,3,4,5
-)
-select
-  charge_ari,
-  week_start,
-  dateadd(day, 6, week_start) as week_end,
-  woy,
-  year_new,
-  ap_on_week_start,
-  days_overdue
-from picked;
-
-select top 1000 * from weekly_autopay_start;
-
-create or replace temp table autopay_driver as 
-select a.* ,
-case when days_overdue>=120 then 'B5'
-     when days_overdue between 90 and 119 then 'B4'
-     when days_overdue between 60 and 89 then 'B3'
-     when days_overdue between 30 and 59 then 'B2'
-     when days_overdue between 1 and 29 then 'B1'
-     when days_overdue =0 then 'B0'
+create or replace table PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.raw_weekly_ap_info as 
+select a.charge_ari,
+a.servicing_effective_date,
+case when a.days_overdue>=120 then 'B5'
+     when a.days_overdue between 90 and 119 then 'B4'
+     when a.days_overdue between 60 and 89 then 'B3'
+     when a.days_overdue between 30 and 59 then 'B2'
+     when a.days_overdue between 7 and 29 then 'B1'
+     when a.days_overdue between 0 and 6 then 'B0'
      else null end as bucket,
-lag(ap_on_week_start,1) over (partition by a.charge_ari order by a.week_start) as last_week_ap,
-b.itac_band
-from weekly_autopay_start a 
-left join itac_info b
-on a.charge_ari=b.charge_ari;
+a.running_principal_balance,
+b.prod,
+b.zp_ib,
+b.is_repeat_cap,
+b.itac_band,
+b.fico_band,
+case when a.is_autopay in ('TRUE') then 1
+     when a.is_autopay in ('FALSE') then 0
+     else null end as auto_pay_ind
+from prod__us.dbt_analytics.loan_status_daily_effective a
+left join PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.loan_info b
+on a.charge_ari=b.charge_ari
+where dayofweek(servicing_effective_date) =1
+and b.prod in ('AC IL','Core IL')
+and running_principal_balance>0
+and year(servicing_effective_date)>=2023;
 
-select top 1000 * from autopay_driver where last_week_ap =1 and ap_on_week_start=0 order by 1;--autopay off
-select top 1000 * from autopay_driver where charge_ari in ('0000-1BH9');-- acct level works fine
+select top 1000 * from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.raw_weekly_ap_info;
 
-create or replace temp table add_ind as
+--append last week ap_info
+create or replace table PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.weekly_ap_driver as
 select *,
-case when last_week_ap - ap_on_week_start >0 then 1
+lag(auto_pay_ind,1) over (partition by charge_ari order by servicing_effective_date) as auto_pay_ind_lw,
+case when auto_pay_ind_lw-auto_pay_ind>0 then 1 
+     when auto_pay_ind_lw-auto_pay_ind=0 then 0
      else 0 end as ap_off_ind
-from autopay_driver
-where last_week_ap is not null;
+from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.raw_weekly_ap_info
+where auto_pay_ind_lw is not null;
 
-select top 1000 * from add_ind;
+select top 1000 * from weekly_ap_driver where charge_ari in ('6FDX-DAFH') order by 2;
 
 
-select
-  woy,
-  itac_band,
-  bucket,
-  sum(ap_off_ind) as total_ap_off,
-  sum(last_week_ap) as total_ap_lw,
-  sum(ap_off_ind) / nullif(sum(last_week_ap), 0) as ap_off_rate  
-from add_ind
-where woy <weekofyear(current_date)
-GROUP BY 1,2,3
-ORDER BY 1,2,3;
+--All conditions in segmentation, too large to put in sheets (67k rows)
+select 
+weekofyear(servicing_effective_date) as woy,
+year(servicing_effective_date) as yr,
+bucket,
+zp_ib,
+is_repeat_cap,
+itac_band,
+fico_band,
+sum(ap_off_ind) as switch_off,
+sum(nullif(auto_pay_ind_lw,0)) as ap_on_lw
+from weekly_ap_driver
+where fico_band is not null and itac_band is not null
+group by 1,2,3,4,5,6,7
+order by 1,2,3,4,5,6,7;
+
+--ITAC Bands
+select 
+weekofyear(servicing_effective_date) as woy,
+year(servicing_effective_date) as yr,
+itac_band,
+sum(ap_off_ind) as switch_off,
+sum(nullif(auto_pay_ind_lw,0)) as ap_on_lw
+from weekly_ap_driver
+where itac_band is not null
+and servicing_effective_date<date_trunc(week,current_date)
+group by 1,2,3
+order by 2,1,3;
