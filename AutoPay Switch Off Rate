@@ -1,3 +1,16 @@
+use warehouse shared_l;
+use database prod__workspace__us;
+use schema SCRATCH_T_CREDITANALYTICS;
+
+select top 1000 * from prod__us.dbt_analytics.loan_status_daily_effective where charge_ari in ('0000-1BH9') 
+order by servicing_effective_date;
+
+select min(servicing_effective_date) from prod__us.dbt_analytics.loan_status_daily_effective;
+
+select top 1000 * from prod__us.dbt_analytics.loan_status_daily_effective
+where is_autopay in ('TRUE') and year(servicing_effective_date)=2023;
+
+
 ---Autopay Monitoring
 
 --loan informaiton
@@ -58,7 +71,7 @@ case when auto_pay_ind_lw-auto_pay_ind>0 then 1
      when auto_pay_ind_lw-auto_pay_ind=0 then 0
      else 0 end as ap_off_ind
 from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.raw_weekly_ap_info
-where auto_pay_ind_lw is not null;
+;
 
 select top 1000 * from weekly_ap_driver where charge_ari in ('6FDX-DAFH') order by 2;
 
@@ -91,3 +104,20 @@ where itac_band is not null
 and servicing_effective_date<date_trunc(week,current_date)
 group by 1,2,3
 order by 2,1,3;
+
+--FICO Bands
+select 
+weekofyear(servicing_effective_date) as woy,
+year(servicing_effective_date) as yr,
+fico_band,
+sum(ap_off_ind) as switch_off,
+sum(nullif(auto_pay_ind_lw,0)) as ap_on_lw
+from PROD__WORKSPACE__US.SCRATCH_T_CREDITANALYTICS.weekly_ap_driver
+where fico_band is not null
+and servicing_effective_date<date_trunc(week,current_date)
+group by 1,2,3
+order by 2,1,3;
+
+
+
+
