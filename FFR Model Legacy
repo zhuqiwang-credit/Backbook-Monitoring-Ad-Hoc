@@ -1,0 +1,135 @@
+union_preds = '''
+CREATE OR REPLACE TEMP TABLE prod__workspace__us.SCRATCH_T_CREDITANALYTICS.TMP_ALL_PREDICTIONS AS
+SELECT
+  charge_ari,
+  EO_PERIOD_PREV_AGE,
+  MAX(CASE WHEN model_type = 'b01' THEN EO_PERIOD_PREV_ASOF_DATE END) AS b01_prev_asof_date,
+  MAX(CASE WHEN model_type = 'b01' THEN EO_PERIOD_ASOF_DATE END) AS b01_asof_date,
+  MAX(CASE WHEN model_type = 'b01' THEN adjusted_prediction END) AS b01_preds,
+  MAX(CASE WHEN model_type = 'b01' THEN calib_prediction END) AS b01_preds_non_adj,
+  MAX(CASE WHEN model_type = 'b12' THEN EO_PERIOD_PREV_ASOF_DATE END) AS b12_prev_asof_date,
+  MAX(CASE WHEN model_type = 'b12' THEN EO_PERIOD_ASOF_DATE END) AS b12_asof_date,
+  MAX(CASE WHEN model_type = 'b12' THEN adjusted_prediction END) AS b12_preds,
+  MAX(CASE WHEN model_type = 'b12' THEN calib_prediction END) AS b12_preds_non_adj,
+  MAX(CASE WHEN model_type = 'b02' THEN EO_PERIOD_PREV_ASOF_DATE END) AS b02_prev_asof_date,
+  MAX(CASE WHEN model_type = 'b02' THEN EO_PERIOD_ASOF_DATE END) AS b02_asof_date,
+  MAX(CASE WHEN model_type = 'b02' THEN adjusted_prediction END) AS b02_preds,
+  MAX(CASE WHEN model_type = 'b02' THEN calib_prediction END) AS b02_preds_non_adj
+FROM (
+  SELECT
+    charge_ari,
+    EO_PERIOD_PREV_AGE,
+    EO_PERIOD_PREV_ASOF_DATE,
+    EO_PERIOD_ASOF_DATE,
+    adjusted_prediction,
+    calib_prediction,
+    'b01' AS model_type
+  FROM prod__workspace__us.scratch_t_quantitativemarkets.flow_rate_0_1_result_table
+  where EO_PERIOD_PREV_ASOF_DATE<date_trunc(week,current_date)
+  UNION ALL
+  SELECT
+    charge_ari,
+    EO_PERIOD_PREV_AGE,
+    EO_PERIOD_PREV_ASOF_DATE,
+    EO_PERIOD_ASOF_DATE,
+    adjusted_prediction,
+    calib_prediction,
+    'b12' AS model_type
+  FROM prod__workspace__us.scratch_t_quantitativemarkets.flow_rate_1_2_result_table
+  where EO_PERIOD_PREV_ASOF_DATE<date_trunc(week,current_date)
+  UNION ALL
+  SELECT
+    charge_ari,
+    EO_PERIOD_PREV_AGE,
+    EO_PERIOD_PREV_ASOF_DATE,
+    EO_PERIOD_ASOF_DATE,
+    adjusted_prediction,
+    calib_prediction,
+    'b02' AS model_type
+  FROM prod__workspace__us.scratch_t_quantitativemarkets.flow_rate_0_2_result_table_model_v5_adhoc
+  where EO_PERIOD_PREV_ASOF_DATE<date_trunc(week,current_date)
+) u
+GROUP BY charge_ari, EO_PERIOD_PREV_AGE;
+'''
+final_preds = pd.read_sql(union_preds, conn)
+print(final_preds)
+
+
+
+add_preds = '''
+CREATE OR REPLACE TABLE prod__workspace__us.SCRATCH_T_CREDITANALYTICS.model_validation_driver AS
+SELECT
+  a.*,
+  b.aov,
+  p.b01_prev_asof_date,
+  p.b01_asof_date,
+  --case when a.base_payment_rank=0 then p.b01_preds*0.92 else p.b01_preds end as 
+  b01_preds,
+  --case when a.base_payment_rank=0 then p.b01_preds_non_adj*0.92 else p.b01_preds_non_adj end as 
+  b01_preds_non_adj,
+  p.b12_prev_asof_date,
+  p.b12_asof_date,
+  p.b12_preds,
+  p.b12_preds_non_adj,
+  p.b02_prev_asof_date,
+  p.b02_asof_date,
+  --case when base_payment_rank = 0 then p.b02_preds*.91 else p.b02_preds end as 
+  b02_preds,
+  --case when base_payment_rank = 0 then p.b02_preds_non_adj*.91 else p.b02_preds end as 
+  b02_preds_non_adj
+FROM prod__workspace__us.SCRATCH_T_CREDITANALYTICS.future_payment_driver a
+LEFT JOIN prod__workspace__us.SCRATCH_T_CREDITANALYTICS.aov b
+  ON a.charge_ari = b.charge_ari
+LEFT JOIN prod__workspace__us.SCRATCH_T_CREDITANALYTICS.TMP_ALL_PREDICTIONS p
+  ON a.charge_ari = p.charge_ari
+ AND a.base_payment_rank = p.EO_PERIOD_PREV_AGE;
+'''
+final = pd.read_sql(add_preds, conn)
+print(final)
+
+
+
+agg_preds = '''
+
+create or replace table prod__workspace__us.SCRATCH_T_CREDITANALYTICS.model_validation_agg as 
+select weekofyear(p2_data_date) as woy, yearofweek(p2_data_date)as yr, 
+term_length_band,
+prod,
+merchant,
+PROJ_GHOST_FLAG,
+fico_band,
+itac_band,
+zp_ib,
+wbe_bucket,
+is_repeat_cap,
+ case when customer_age in ('>6mo') then 'q>6mo'
+ else customer_age end as customer_age,
+base_payment,
+base_payment_rank,
+p2_payment,
+p2_payment_rank,
+case when aov < 150 then '<150'
+     when aov between 150 and 250 then '150-250'
+     when aov between 251 and 500 then '251-500'
+     when aov between 501 and 1000 then '501-1000'
+     when aov > 1000 then '1000+'
+end as aov_band,
+to_date(left(acquisition_month,10)) as acq_vintage_mth,
+sum(case when p2_bkt in ('B2')  and base_bkt in ('B0') then p2_bal end) as num_actual, 
+sum(case when base_bkt in ('B0') then base_bal end) as denom_actual, 
+sum(base_bal*b01_preds) as b01_bal_preds,
+sum(base_bal*b12_preds) as b12_bal_preds,
+sum(base_bal*b02_preds) as b02_bal_preds,
+sum(base_bal*b01_preds_non_adj) as b01_bal_preds_non_adj,
+sum(base_bal*b12_preds_non_adj) as b12_bal_preds_non_adj,
+sum(base_bal*b02_preds_non_adj) as b02_bal_preds_non_adj
+from prod__workspace__us.SCRATCH_T_CREDITANALYTICS.model_validation_driver
+where merchant not in ('Peloton') and prod in ('AC IL','Core IL','AA IL','Shopify IL') 
+--and not(yr=year(current_date()) and woy=weekofyear(current_date()))
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18
+order by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18
+;
+'''
+conn.cursor().execute(agg_preds)
+agg = pd.read_sql(agg_preds, conn)
+print(agg)
