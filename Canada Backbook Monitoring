@@ -1,4 +1,5 @@
 --Weekly Canada Flow Rates (for the actual charts)
+--Data Input - Tab: CA FFR Data
 select
 weekofyear(eff_dt) as WoY,
 yearofweek(eff_dt) as Year_New,
@@ -21,6 +22,7 @@ order by
 
 
 --Monthly Canada Flow Rates (for the table summary)
+--Data Input - Tab: Monthly Data (Col A:J)
 select
 month(eff_dt) as WoY,
 yearofweek(eff_dt) as Year_New,
@@ -43,6 +45,7 @@ order by
 
 
 -- DQ Rates & Inventory Rates Weekly Views
+--Data Input - Tab: CA DQ WoW Data
 With A as(
 select
 weekofyear(eff_dt) as WOY,
@@ -88,6 +91,7 @@ order by
 
 
 -- DQ Rates & Inventory Rates Monthly Summary Table
+--Data Input - Tab: Monthly Data (Col O:V)
 With A as(
 select
 month(eff_dt) as WoY,
@@ -137,6 +141,7 @@ order by
 
 
 --Charge Off Type and Volume
+--Data Input - Tab: CO Data (A1:C94)
 select
 date_trunc('month',CO_DATE) as CO_Month,
 case when BK_FLAG=1 then 'BKO'
@@ -150,6 +155,7 @@ group by 1,2 order by 1,2;
 
 
 --Total Outstanding (Used to calculate the CO, BK rate with the above script)
+--Data Input - Tab: CO Data (O12-O43)
 select
 date_trunc('month',eff_dt) as Start_Month,
 (sum(buck0_bal)+sum(buck1_bal)+sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as Total_Outstanding
@@ -162,6 +168,7 @@ group by
 
 
 --BK rate by vintage
+--Data Input Tab: CO Data (A527:C999)
 With Total_Loan_Amount as (
 select
     date_trunc('month',capture_date) as Capture_Month,
@@ -198,6 +205,7 @@ on
 
 
 --CO rate by vintage
+--Data Input Tab: CO Data (A118:C519)
 With Total_Loan_Amount as (
 select
     date_trunc('month',capture_date) as Capture_Month,
