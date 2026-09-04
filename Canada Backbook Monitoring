@@ -1,0 +1,232 @@
+--Weekly Canada Flow Rates (for the actual charts)
+select
+weekofyear(eff_dt) as WoY,
+yearofweek(eff_dt) as Year_New,
+(sum(buck_0_1_bal)/sum(NULLIF(buck0_bal_lag30,0))) as FFR0_1,
+(sum(buck_1_2_bal)/sum(NULLIF(buck1_bal_lag30,0))) as FFR1_2,
+(sum(buck_0_2_bal)/sum(NULLIF(buck0_bal_lag60,0))) as FFR0_2,
+(sum(buck_2_3_bal)/sum(NULLIF(buck2_bal_lag30,0))) as FFR2_3,
+(sum(buck_3_4_bal)/sum(NULLIF(buck3_bal_lag30,0))) as FFR3_4,
+(sum(buck_4_5_bal)/sum(NULLIF(buck4_bal_lag30,0))) as FFR4_5,
+(sum(buck_1_5_bal)/sum(NULLIF(buck1_bal_lag120,0))) as FFR1_5,
+(sum(buck_0_5_bal)/sum(NULLIF(buck0_bal_lag150,0))) as FFR0_5
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_ffr_looker_new
+where
+Year(eff_dt) in ('2026','2025','2024') and merchant not in ('Peloton') and eff_dt<'2026-08-01' --when running the table, limit year to 2024, otherwise put back 2023
+ group by
+ 1,2
+order by
+1;
+
+
+--Monthly Canada Flow Rates (for the table summary)
+select
+month(eff_dt) as WoY,
+yearofweek(eff_dt) as Year_New,
+(sum(buck_0_1_bal)/sum(NULLIF(buck0_bal_lag30,0))) as FFR0_1,
+(sum(buck_1_2_bal)/sum(NULLIF(buck1_bal_lag30,0))) as FFR1_2,
+(sum(buck_0_2_bal)/sum(NULLIF(buck0_bal_lag60,0))) as FFR0_2,
+(sum(buck_2_3_bal)/sum(NULLIF(buck2_bal_lag30,0))) as FFR2_3,
+(sum(buck_3_4_bal)/sum(NULLIF(buck3_bal_lag30,0))) as FFR3_4,
+(sum(buck_4_5_bal)/sum(NULLIF(buck4_bal_lag30,0))) as FFR4_5,
+(sum(buck_1_5_bal)/sum(NULLIF(buck1_bal_lag120,0))) as FFR1_5,
+(sum(buck_0_5_bal)/sum(NULLIF(buck0_bal_lag150,0))) as FFR0_5
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_ffr_looker_new
+where
+Year(eff_dt) in ('2026','2025','2024') and merchant not in ('Peloton') and eff_dt<'2026-08-01' --when running the table, limit year to 2024, otherwise put back 2023
+ group by
+ 1,2
+order by
+1;
+
+
+-- DQ Rates & Inventory Rates Weekly Views
+With A as(
+select
+weekofyear(eff_dt) as WOY,
+year(eff_dt) as Year_New,
+(sum(buck0_bal)+sum(buck1_bal)+sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as Total_Outstanding,
+(sum(buck1_bal)+sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as DQ_4_Bal,
+(sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as DQ_30_Bal,
+sum(buck1_bal) as Bucket_One,
+sum(buck2_bal) as Bucket_Two,
+sum(buck3_bal) as Bucket_Three,
+sum(buck4_bal) as Bucket_Four,
+sum(buck5_bal) as Bucket_Five
+
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_ffr_looker_new
+where
+ merchant not in ('Peloton') and Year(eff_dt) in ('2024','2025','2026')  
+ and eff_dt<'2026-08-01'
+
+group by
+    1,2)
+
+select
+WoY,
+Year_New,
+    (DQ_4_Bal/Total_Outstanding) as DQ_4_Plus,
+    (DQ_30_Bal/Total_Outstanding) as DQ_30_Plus,
+
+    Total_Outstanding,
+    Bucket_One,
+    Bucket_Two,
+    Bucket_Three,
+    Bucket_Four,
+    (Bucket_One/Total_Outstanding) as Bucket_One,
+    (Bucket_Two/Total_Outstanding) as Bucket_Two,
+    (Bucket_Three/Total_Outstanding) as Bucket_Three,
+    (Bucket_Four/Total_Outstanding) as Bucket_Four
+from
+    A
+order by
+    WoY;
+
+
+
+-- DQ Rates & Inventory Rates Monthly Summary Table
+With A as(
+select
+month(eff_dt) as WoY,
+--weekofyear(eff_dt) as WOY,
+year(eff_dt) as Year_New,
+-- date_trunc('week',eff_dt) as WoY,
+-- merchant,
+--weekofyear(eff_dt) as Week_of_Year,
+(sum(buck0_bal)+sum(buck1_bal)+sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as Total_Outstanding,
+(sum(buck1_bal)+sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as DQ_4_Bal,
+(sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as DQ_30_Bal,
+sum(buck1_bal) as Bucket_One,
+sum(buck2_bal) as Bucket_Two,
+sum(buck3_bal) as Bucket_Three,
+sum(buck4_bal) as Bucket_Four,
+sum(buck5_bal) as Bucket_Five
+
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_ffr_looker_new
+where
+ merchant not in ('Peloton') and Year(eff_dt) in ('2024','2025','2026')  
+ and eff_dt<'2026-08-01'--change date as needed
+
+group by
+    1,2)
+
+select
+WoY,
+Year_New,
+    (DQ_4_Bal/Total_Outstanding) as DQ_4_Plus,
+    (DQ_30_Bal/Total_Outstanding) as DQ_30_Plus,
+
+    Total_Outstanding,
+    Bucket_One,
+    Bucket_Two,
+    Bucket_Three,
+    Bucket_Four,
+    (Bucket_One/Total_Outstanding) as Bucket_One,
+    (Bucket_Two/Total_Outstanding) as Bucket_Two,
+    (Bucket_Three/Total_Outstanding) as Bucket_Three,
+    (Bucket_Four/Total_Outstanding) as Bucket_Four
+
+from
+    A
+order by
+    WoY;
+
+
+--Charge Off Type and Volume
+select
+date_trunc('month',CO_DATE) as CO_Month,
+case when BK_FLAG=1 then 'BKO'
+when fraud_flag=1 then 'Fraud' else 'Credit' end as CO_Category,
+sum(gross_co) as Gross_CO
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_co_looker_New_Temp
+where
+CO_Month>='2024-01-01' and CO_Month<'2026-08-01'--change date as needed
+group by 1,2 order by 1,2;
+
+
+--Total Outstanding (Used to calculate the CO, BK rate with the above script)
+select
+date_trunc('month',eff_dt) as Start_Month,
+(sum(buck0_bal)+sum(buck1_bal)+sum(buck2_bal)+sum(buck3_bal)+sum(buck4_bal)) as Total_Outstanding
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_FFR_looker_New
+where
+day(eff_dt)=1 and Start_Month>='2024-01-01' and Start_Month<='2026-08-01'--change date as needed
+group by
+1 order by 1;
+
+
+--BK rate by vintage
+With Total_Loan_Amount as (
+select
+    date_trunc('month',capture_date) as Capture_Month,
+    coalesce(sum(distinct loan_amount),0) as Total_Loan_Amount
+from
+    PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_co_looker_New_Temp
+where
+    capture_month>='2023-11-01'
+group by
+1),
+Total_CO as (
+select
+date_trunc('month',capture_date) as Capture_Month,
+datediff('month',date_trunc('month',capture_date),date_trunc('month',CO_DATE)) as MOB,
+sum(gross_co) as Gross_CO_Rate
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_co_looker_New_Temp
+where
+Capture_Month>='2023-12-01' and CO_DATE is not NULL and CO_DATE<'2026-08-01'
+and bk_flag =1
+group by
+1,2)
+
+select
+    to_date(t1.Capture_Month) as Capture_Month,
+    t1.MOB,
+    (sum(Gross_CO_Rate) over(partition by t1.capture_month order by MOB))/Total_Loan_Amount as Gross_CO_Rate
+from
+    Total_CO as t1
+left join
+    TOTAL_LOAN_AMOUNT as t2
+on
+    t1.capture_Month=t2.Capture_Month;
+
+
+--CO rate by vintage
+With Total_Loan_Amount as (
+select
+    date_trunc('month',capture_date) as Capture_Month,
+    coalesce(sum(distinct loan_amount),0) as Total_Loan_Amount
+from
+    PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_co_looker_New_Temp
+where
+    capture_month>='2023-11-01'
+group by
+1),
+Total_CO as (
+select
+date_trunc('month',capture_date) as Capture_Month,
+datediff('month',date_trunc('month',capture_date),date_trunc('month',CO_DATE)) as MOB,
+sum(gross_co) as Gross_CO_Rate
+from
+PROD__WORKSPACE__CA.SCRATCH_LOOKER_WORKSPACE.ca_br_co_looker_New_Temp
+where
+Capture_Month>='2023-12-01' and CO_DATE is not NULL and CO_DATE<'2026-08-01'
+group by
+1,2)
+
+select
+    to_date(t1.Capture_Month) as Capture_Month,
+    t1.MOB,
+    (sum(Gross_CO_Rate) over(partition by t1.capture_month order by MOB))/Total_Loan_Amount as Gross_CO_Rate
+from
+    Total_CO as t1
+left join
+    TOTAL_LOAN_AMOUNT as t2
+on
+    t1.capture_Month=t2.Capture_Month;
